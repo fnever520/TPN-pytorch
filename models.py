@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
+import pdb
 
 
 class CNNEncoder(nn.Module):
@@ -205,6 +206,20 @@ class LabelPropagation(nn.Module):
         F  = torch.matmul(torch.inverse(torch.eye(N).cuda(0)-self.alpha*S+eps), y)
         Fq = F[num_classes*num_support:, :] # query predictions
         
+        '''
+        # TODO:
+        assume gt is the true label and get the means
+        '''
+        pdb.set_trace()
+        print(Fq.shape) # [15:, :]
+
+        emb_all_sq = emb_all.view(num_classes, num_support*num_queries, 1600).mean(1)
+        print(emb_all_sq.shape)
+        emb_s1 = torch.unsqueeze(emb_all_sq, 0)     # 1xNxD
+        emb_q1 = torch.unsqueeze(emb_all_sq, 1)     # Nx1xD
+        dist = ((emb_q1-emb_s1)**2).mean(2)   # NxNxD -> NxN
+
+
         # Step4: Cross-Entropy Loss
         ce = nn.CrossEntropyLoss().cuda(0)
         ## both support and query loss
