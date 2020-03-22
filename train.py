@@ -17,6 +17,8 @@ import argparse
 import models
 import math
 from tqdm import tqdm
+import joblib
+import matplotlib.pyplot as plt
 
 from dataset_mini import *
 from dataset_tiered import *
@@ -88,7 +90,7 @@ parser.add_argument('--rn',         type=int,   default=300,        metavar='RN'
 # save and restore params
 parser.add_argument('--seed',       type=int,   default=1000,       metavar='SEED',
                     help="random seed for code and data sample")
-parser.add_argument('--exp_name',   type=str,   default='exp',      metavar='EXPNAME',
+parser.add_argument('--exp_name',   type=str,   default='exp',      metavar='EXPNAME', 
                     help="experiment name")
 parser.add_argument('--iters',      type=int,   default=0,          metavar='ITERS',
                     help="iteration to restore params")
@@ -132,6 +134,24 @@ def _init_():
 _init_()
 
 
+def get_weight(model):
+    weight_list = []
+    for name, param in model.named_parameters():
+        if 'weight' in name:
+            weight = (name, param)
+            weight_list.append(weight)
+
+    return weight_list
+
+
+def regularization_loss(weight_list, weight_decay, p):
+    reg_loss = 0 
+    for name, w in weight_list:
+        l2_reg = torch.norm(w, p=p)
+        reg_loss = reg_loss + l2_reg
+
+    reg_loss = weight_decay*reg_loss
+    return reg_loss
 
 def main():
     # Step 1: init dataloader
@@ -177,6 +197,7 @@ def main():
     best_acc = 0.0
     best_loss = np.inf
     wait = 0
+    l2 = 0
     for ep in range(iters, n_epochs):
         loss_tr = []
         ce_list = []
@@ -208,6 +229,16 @@ def main():
             inputs = [support.cuda(0), s_onehot.cuda(0), query.cuda(0), q_onehot.cuda(0)]
             
             loss, acc = model(inputs)
+            
+            weight_list = get_weight(model)
+            reg_loss = regularization_loss(weight_list, weight_decay = 0.05, p=2)
+
+            loss += reg_loss
+            
+            # for p in model.parameters():
+            #     l2 += torch.sum(p**2)
+            # loss = loss + 0.005*l2
+
             loss_tr.append(loss.item())
             acc_tr.append(acc.item())
 
@@ -224,8 +255,8 @@ def main():
             # sample data for next batch
             support, s_labels, query, q_labels, unlabel = loader_val.next_data(n_test_way, n_test_shot, n_test_query)
             support = np.reshape(support, (support.shape[0]*support.shape[1],)+support.shape[2:])
-            support = torch.from_numpy(np.transpose(support, (0,3,1,2)))
             query   = np.reshape(query, (query.shape[0]*query.shape[1],)+query.shape[2:])
+            support = torch.from_numpy(np.transpose(support, (0,3,1,2)))
             query   = torch.from_numpy(np.transpose(query, (0,3,1,2)))
             s_labels = torch.from_numpy(np.reshape(s_labels,(-1,)))
             q_labels = torch.from_numpy(np.reshape(q_labels,(-1,)))
@@ -233,12 +264,12 @@ def main():
             q_labels = q_labels.type(torch.LongTensor)
             s_onehot = torch.zeros(n_test_way*n_test_shot, n_test_way).scatter_(1, s_labels.view(-1,1), 1)
             q_onehot = torch.zeros(n_test_way*n_test_query, n_test_way).scatter_(1, q_labels.view(-1,1), 1)
-            
+
             with torch.no_grad():
                 inputs = [support.cuda(0), s_onehot.cuda(0), query.cuda(0), q_onehot.cuda(0)]
                 loss, acc = model(inputs)
 
-            loss_val.append(loss.item() )
+            loss_val.append(loss.item())
             acc_val.append(acc.item())
 
         print('epoch:{}, loss_tr:{:.5f}, acc_tr:{:.5f}, loss_val:{:.5f}, acc_val:{:.5f}'.format(ep, np.mean(loss_tr), np.mean(acc_tr), np.mean(loss_val), np.mean(acc_val)))
@@ -274,6 +305,15 @@ def main():
         if wait>patience and ep>n_epochs:
             break
 
+    print("Best acc:", best_acc)
+    print("Best loss:", best_loss)
+    plt.plot(range(n_epochs), loss_val)
+    plt.show()
+
+    # with open("acc_5w1s_5tw1ts_vanilla", wb) as f:
+    #     pickle.dump(acc_val, f, protocol = pickle.HIGHEST_PROTOCOL)
+    with open("val_loss_5w1s_5tw1ts_vanilla", wb) as f:
+        pickle.dump(loss_val, f, protocol = pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
     main()

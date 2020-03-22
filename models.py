@@ -121,6 +121,8 @@ class Prototypical(nn.Module):
         emb_q = torch.unsqueeze(emb_q,1)     # Nx1xD
         dist  = ((emb_q-emb_s)**2).mean(2)   # NxNxD -> NxN
 
+        emb_s = emb_s.view(num_classes, num_support, 1600).float.mean(1)
+
         ce = nn.CrossEntropyLoss().cuda(0)
         loss = ce(-dist, torch.argmax(q_labels,1))
         ## acc
@@ -189,21 +191,21 @@ class LabelPropagation(nn.Module):
             mask = mask.scatter(1, indices, 1)
             mask = ((mask+torch.t(mask))>0).type(torch.float32)      # union, kNN graph
             #mask = ((mask>0)&(torch.t(mask)>0)).type(torch.float32)  # intersection, kNN graph
-            W    = W*mask
+            W    = W*mask  # (80,80)
 
         ## normalize
         D       = W.sum(0)
         D_sqrt_inv = torch.sqrt(1.0/(D+eps))
         D1      = torch.unsqueeze(D_sqrt_inv,1).repeat(1,N)
         D2      = torch.unsqueeze(D_sqrt_inv,0).repeat(N,1)
-        S       = D1*W*D2
+        S       = D1*W*D2  #(80,80)
 
         # Step3: Label Propagation, F = (I-\alpha S)^{-1}Y
         ys = s_labels
         yu = torch.zeros(num_classes*num_queries, num_classes).cuda(0)
         #yu = (torch.ones(num_classes*num_queries, num_classes)/num_classes).cuda(0)
         y  = torch.cat((ys,yu),0)
-        F  = torch.matmul(torch.inverse(torch.eye(N).cuda(0)-self.alpha*S+eps), y)
+        F  = torch.matmul(torch.inverse(torch.eye(N).cuda(0)-self.alpha*S+eps), y)  # (80,5)
         Fq = F[num_classes*num_support:, :] # query predictions
         
         '''
@@ -213,26 +215,32 @@ class LabelPropagation(nn.Module):
         pdb.set_trace()
         print(Fq.shape) # [15:, :]
 
-        emb_all_sq = emb_all.view(num_classes, num_support*num_queries, 1600).mean(1)
-        print(emb_all_sq.shape)
-        emb_s1 = torch.unsqueeze(emb_all_sq, 0)     # 1xNxD
-        emb_q1 = torch.unsqueeze(emb_all_sq, 1)     # Nx1xD
+        # find the shape of F
+        
+        #
+      
+        s_proto = emb_all[:num_classes*num_support].view(num_classes, num_support, d).mean(1)
+        emb_q = emb_all[num_classes*num_support:,d]
+        
+        emb_s1 = torch.unsqueeze(s_proto, 0)     # 1xNxD
+        emb_q1 = torch.unsqueeze(emb_q, 1)     # Nx1xD
         dist = ((emb_q1-emb_s1)**2).mean(2)   # NxNxD -> NxN
 
-
+ 
         # Step4: Cross-Entropy Loss
         ce = nn.CrossEntropyLoss().cuda(0)
+        loss1 = ce(-dist, torch.argmax(q_labels,1))
+        predq = torch.argmax(-dist, 1)
+
         ## both support and query loss
         gt = torch.argmax(torch.cat((s_labels, q_labels), 0), 1)
-        loss = ce(F, gt)
+        loss2 = ce(F, gt)
+        loss = loss1+loss2
         ## acc
-        predq = torch.argmax(Fq,1)
+        # predq = torch.argmax(Fq,1)
         gtq   = torch.argmax(q_labels,1)
         correct = (predq==gtq).sum()
         total   = num_queries * num_classes
         acc = 1.0 * correct.float() / float(total)
 
         return loss, acc
-
-
-
